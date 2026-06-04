@@ -1,7 +1,7 @@
 ﻿const User = require("../models/User");
 const generateToken = require("../utils/generateToken");
 
-const register = async (req, res) => {
+exports.register = async (req, res) => {
   try {
     const { name, email, password, role } = req.body;
 
@@ -48,7 +48,7 @@ const register = async (req, res) => {
   }
 };
 
-const login = async (req, res) => {
+exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
@@ -97,15 +97,9 @@ const login = async (req, res) => {
   }
 };
 
-const getMe = async (req, res) => {
+exports.getMe = async (req, res) => {
   return res.status(200).json({
     success: true,
     data: req.user,
   });
-};
-
-module.exports = {
-  register,
-  login,
-  getMe,
 };
