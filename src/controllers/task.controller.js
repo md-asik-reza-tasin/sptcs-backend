@@ -2,6 +2,9 @@
 const Project = require("../models/Project");
 const User = require("../models/User");
 
+const allowedStatuses = ["todo", "in_progress", "completed"];
+const allowedPriorities = ["high", "medium", "low"];
+
 const isPastDate = (date) => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -10,6 +13,23 @@ const isPastDate = (date) => {
   selectedDate.setHours(0, 0, 0, 0);
 
   return selectedDate < today;
+};
+
+const escapeRegex = (text) => {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+};
+
+const findDuplicateTaskTitle = (title, project, taskId) => {
+  const filter = {
+    project,
+    title: { $regex: `^${escapeRegex(title)}$`, $options: "i" },
+  };
+
+  if (taskId) {
+    filter._id = { $ne: taskId };
+  }
+
+  return Task.findOne(filter);
 };
 
 const populateTask = (query) => {
@@ -40,6 +60,20 @@ const createTask = async (req, res) => {
       });
     }
 
+    if (status && !allowedStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid task status",
+      });
+    }
+
+    if (priority && !allowedPriorities.includes(priority)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid task priority",
+      });
+    }
+
     const projectExists = await Project.findById(project);
 
     if (!projectExists) {
@@ -58,10 +92,19 @@ const createTask = async (req, res) => {
       });
     }
 
+    const duplicateTask = await findDuplicateTaskTitle(title, project);
+
+    if (duplicateTask) {
+      return res.status(400).json({
+        success: false,
+        message: "This task already exists in the project.",
+      });
+    }
+
     if (isPastDate(dueDate)) {
       return res.status(400).json({
         success: false,
-        message: "Due date cannot be in the past",
+        message: "Please select a valid deadline.",
       });
     }
 
@@ -158,6 +201,45 @@ const updateTask = async (req, res) => {
       });
     }
 
+    if (status && !allowedStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid task status",
+      });
+    }
+
+    if (priority && !allowedPriorities.includes(priority)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid task priority",
+      });
+    }
+
+    if (title) {
+      const duplicateTask = await findDuplicateTaskTitle(title, task.project, task._id);
+
+      if (duplicateTask) {
+        return res.status(400).json({
+          success: false,
+          message: "This task already exists in the project.",
+        });
+      }
+    }
+
+    if (dueDate && isPastDate(dueDate)) {
+      return res.status(400).json({
+        success: false,
+        message: "Please select a valid deadline.",
+      });
+    }
+
+    if (task.status === "completed" && assignedMember) {
+      return res.status(400).json({
+        success: false,
+        message: "Completed tasks cannot be reassigned.",
+      });
+    }
+
     if (assignedMember) {
       const assignedUser = await User.findById(assignedMember);
 
@@ -167,13 +249,6 @@ const updateTask = async (req, res) => {
           message: "Assigned member not found",
         });
       }
-    }
-
-    if (dueDate && isPastDate(dueDate)) {
-      return res.status(400).json({
-        success: false,
-        message: "Due date cannot be in the past",
-      });
     }
 
     const updatedTask = await Task.findByIdAndUpdate(
@@ -228,12 +303,11 @@ const deleteTask = async (req, res) => {
 const updateTaskStatus = async (req, res) => {
   try {
     const { status } = req.body;
-    const allowedStatuses = ["todo", "in_progress", "completed"];
 
-    if (!allowedStatuses.includes(status)) {
+    if (!status || !allowedStatuses.includes(status)) {
       return res.status(400).json({
         success: false,
-        message: "Status must be todo, in_progress, or completed",
+        message: "Invalid task status",
       });
     }
 
