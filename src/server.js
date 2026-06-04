@@ -17,6 +17,7 @@ app.use("/api/projects", require("./routes/project.routes"));
 app.use("/api/tasks", require("./routes/task.routes"));
 app.use("/api/activities", require("./routes/activity.routes"));
 app.use("/api/dashboard", require("./routes/dashboard.routes"));
+app.use("/api/users", require("./routes/user.routes"));
 
 app.get("/", (req, res) => {
   res.send("Backend API is running");

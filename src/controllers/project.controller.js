@@ -11,6 +11,18 @@ const isPastDate = (date) => {
   return selectedDate < today;
 };
 
+const escapeRegex = (text) => {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+};
+
+const getPagination = (pageQuery, limitQuery) => {
+  const page = Math.max(parseInt(pageQuery, 10) || 1, 1);
+  const limit = Math.max(parseInt(limitQuery, 10) || 10, 1);
+  const skip = (page - 1) * limit;
+
+  return { page, limit, skip };
+};
+
 const createProject = async (req, res) => {
   try {
     const { name, description, deadline, status } = req.body;
@@ -61,14 +73,39 @@ const createProject = async (req, res) => {
 
 const getProjects = async (req, res) => {
   try {
-    const projects = await Project.find()
+    const { search, status, sort } = req.query;
+    const { page, limit, skip } = getPagination(req.query.page, req.query.limit);
+    const filter = {};
+    const sortOptions = {
+      latest: { createdAt: -1 },
+      nearestDeadline: { deadline: 1 },
+      recentlyUpdated: { updatedAt: -1 },
+    };
+
+    if (search) {
+      const regex = new RegExp(escapeRegex(search), "i");
+      filter.$or = [{ name: regex }, { description: regex }];
+    }
+
+    if (status) {
+      filter.status = status;
+    }
+
+    const total = await Project.countDocuments(filter);
+    const projects = await Project.find(filter)
       .populate("createdBy", "name email role")
       .populate("members.user", "name email role")
-      .sort({ createdAt: -1 });
+      .sort(sortOptions[sort] || sortOptions.latest)
+      .skip(skip)
+      .limit(limit);
 
     return res.status(200).json({
       success: true,
       message: "Projects fetched successfully",
+      total,
+      page,
+      pages: Math.ceil(total / limit),
+      count: projects.length,
       data: projects,
     });
   } catch (error) {

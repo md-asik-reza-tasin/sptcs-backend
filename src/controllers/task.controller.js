@@ -5,6 +5,7 @@ const createActivity = require("../utils/createActivity");
 
 const allowedStatuses = ["todo", "in_progress", "completed"];
 const allowedPriorities = ["high", "medium", "low"];
+const priorityOrder = { high: 1, medium: 2, low: 3 };
 
 const isPastDate = (date) => {
   const today = new Date();
@@ -18,6 +19,14 @@ const isPastDate = (date) => {
 
 const escapeRegex = (text) => {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+};
+
+const getPagination = (pageQuery, limitQuery) => {
+  const page = Math.max(parseInt(pageQuery, 10) || 1, 1);
+  const limit = Math.max(parseInt(limitQuery, 10) || 10, 1);
+  const skip = (page - 1) * limit;
+
+  return { page, limit, skip };
 };
 
 const findDuplicateTaskTitle = (title, project, taskId) => {
@@ -146,23 +155,77 @@ const createTask = async (req, res) => {
 
 const getTasks = async (req, res) => {
   try {
-    const { project, status, priority, assignedMember } = req.query;
+    const {
+      search,
+      project,
+      status,
+      priority,
+      assignedMember,
+      deadlineStatus,
+      sort,
+    } = req.query;
+    const { page, limit, skip } = getPagination(req.query.page, req.query.limit);
     const filter = {};
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    if (search) {
+      const regex = new RegExp(escapeRegex(search), "i");
+      filter.$or = [{ title: regex }, { description: regex }];
+    }
 
     if (project) filter.project = project;
     if (status) filter.status = status;
     if (priority) filter.priority = priority;
     if (assignedMember) filter.assignedMember = assignedMember;
 
-    const tasks = await Task.find(filter)
-      .populate("project", "name status")
-      .populate("assignedMember", "name email role")
-      .populate("createdBy", "name email role")
-      .sort({ createdAt: -1 });
+    if (deadlineStatus === "overdue") {
+      filter.dueDate = { $lt: today };
+      filter.status = { $ne: "completed" };
+    }
+
+    if (deadlineStatus === "upcoming") {
+      filter.dueDate = { $gte: today };
+      filter.status = { $ne: "completed" };
+    }
+
+    const total = await Task.countDocuments(filter);
+    let tasks;
+
+    if (sort === "highestPriority") {
+      const allTasks = await Task.find(filter)
+        .populate("project", "name status")
+        .populate("assignedMember", "name email role")
+        .populate("createdBy", "name email role")
+        .populate("comments.user", "name email role");
+
+      tasks = allTasks
+        .sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority])
+        .slice(skip, skip + limit);
+    } else {
+      const sortOptions = {
+        latest: { createdAt: -1 },
+        nearestDeadline: { dueDate: 1 },
+        recentlyUpdated: { updatedAt: -1 },
+      };
+
+      tasks = await Task.find(filter)
+        .populate("project", "name status")
+        .populate("assignedMember", "name email role")
+        .populate("createdBy", "name email role")
+        .populate("comments.user", "name email role")
+        .sort(sortOptions[sort] || sortOptions.latest)
+        .skip(skip)
+        .limit(limit);
+    }
 
     return res.status(200).json({
       success: true,
       message: "Tasks fetched successfully",
+      total,
+      page,
+      pages: Math.ceil(total / limit),
+      count: tasks.length,
       data: tasks,
     });
   } catch (error) {
