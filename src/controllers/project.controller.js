@@ -1,4 +1,5 @@
 ﻿const Project = require("../models/Project");
+const createActivity = require("../utils/createActivity");
 
 const isPastDate = (date) => {
   const today = new Date();
@@ -36,6 +37,14 @@ const createProject = async (req, res) => {
       createdBy: req.user._id,
       members: [{ user: req.user._id, role: req.user.role }],
     });
+
+    await createActivity(
+      req.user._id,
+      "create_project",
+      "project",
+      project._id,
+      `Project "${project.name}" created`
+    );
 
     return res.status(201).json({
       success: true,
@@ -124,6 +133,14 @@ const updateProject = async (req, res) => {
       .populate("createdBy", "name email role")
       .populate("members.user", "name email role");
 
+    await createActivity(
+      req.user._id,
+      "update_project",
+      "project",
+      updatedProject._id,
+      `Project "${updatedProject.name}" updated`
+    );
+
     return res.status(200).json({
       success: true,
       message: "Project updated successfully",
@@ -147,6 +164,14 @@ const deleteProject = async (req, res) => {
         message: "Project not found",
       });
     }
+
+    await createActivity(
+      req.user._id,
+      "delete_project",
+      "project",
+      project._id,
+      `Project "${project.name}" deleted`
+    );
 
     await project.deleteOne();
 

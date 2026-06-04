@@ -1,6 +1,7 @@
 ﻿const Task = require("../models/Task");
 const Project = require("../models/Project");
 const User = require("../models/User");
+const createActivity = require("../utils/createActivity");
 
 const allowedStatuses = ["todo", "in_progress", "completed"];
 const allowedPriorities = ["high", "medium", "low"];
@@ -119,6 +120,14 @@ const createTask = async (req, res) => {
       attachments,
       createdBy: req.user._id,
     });
+
+    await createActivity(
+      req.user._id,
+      "create_task",
+      "task",
+      task._id,
+      `Task "${task.title}" created`
+    );
 
     const populatedTask = await populateTask(Task.findById(task._id));
 
@@ -261,6 +270,14 @@ const updateTask = async (req, res) => {
       .populate("createdBy", "name email role")
       .populate("comments.user", "name email role");
 
+    await createActivity(
+      req.user._id,
+      "update_task",
+      "task",
+      updatedTask._id,
+      `Task "${updatedTask.title}" updated`
+    );
+
     return res.status(200).json({
       success: true,
       message: "Task updated successfully",
@@ -284,6 +301,14 @@ const deleteTask = async (req, res) => {
         message: "Task not found",
       });
     }
+
+    await createActivity(
+      req.user._id,
+      "delete_task",
+      "task",
+      task._id,
+      `Task "${task.title}" deleted`
+    );
 
     await task.deleteOne();
 
@@ -333,6 +358,14 @@ const updateTaskStatus = async (req, res) => {
     task.status = status;
     await task.save();
 
+    await createActivity(
+      req.user._id,
+      "update_task_status",
+      "task",
+      task._id,
+      `Task "${task.title}" marked as ${status}`
+    );
+
     const updatedTask = await populateTask(Task.findById(task._id));
 
     return res.status(200).json({
@@ -374,6 +407,14 @@ const addComment = async (req, res) => {
     });
 
     await task.save();
+
+    await createActivity(
+      req.user._id,
+      "add_comment",
+      "comment",
+      task._id,
+      `Comment added on task "${task.title}"`
+    );
 
     const updatedTask = await populateTask(Task.findById(task._id));
 
