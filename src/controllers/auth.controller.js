@@ -1,4 +1,5 @@
 ﻿const User = require("../models/User");
+const generateToken = require("../utils/generateToken");
 
 const register = async (req, res) => {
   try {
@@ -36,6 +37,7 @@ const register = async (req, res) => {
         email: user.email,
         role: user.role,
         createdAt: user.createdAt,
+        token: generateToken(user._id),
       },
     });
   } catch (error) {
@@ -84,6 +86,7 @@ const login = async (req, res) => {
         email: user.email,
         role: user.role,
         createdAt: user.createdAt,
+        token: generateToken(user._id),
       },
     });
   } catch (error) {
