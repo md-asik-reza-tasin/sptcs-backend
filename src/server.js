@@ -13,14 +13,17 @@ app.use(cors());
 app.use(express.json());
 
 app.use("/api/auth", require("./routes/auth.routes"));
+app.use("/api/users", require("./routes/user.routes"));
 app.use("/api/projects", require("./routes/project.routes"));
 app.use("/api/tasks", require("./routes/task.routes"));
-app.use("/api/activities", require("./routes/activity.routes"));
 app.use("/api/dashboard", require("./routes/dashboard.routes"));
-app.use("/api/users", require("./routes/user.routes"));
+app.use("/api/activities", require("./routes/activity.routes"));
 
 app.get("/", (req, res) => {
-  res.send("Backend API is running");
+  res.status(200).json({
+    success: true,
+    message: "MPMS Backend API is running",
+  });
 });
 
 const PORT = process.env.PORT || 5000;
