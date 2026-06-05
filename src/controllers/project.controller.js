@@ -1,5 +1,8 @@
 ﻿const Project = require("../models/Project");
 const createActivity = require("../utils/createActivity");
+const createNotification = require("../utils/createNotification");
+const Task = require("../models/Task");
+const User = require("../models/User");
 
 const isPastDate = (date) => {
   const today = new Date();
@@ -142,6 +145,193 @@ const getProjectById = async (req, res) => {
   }
 };
 
+const addMemberToProject = async (req, res) => {
+  try {
+    const { userId, role } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "User is required",
+      });
+    }
+
+    const project = await Project.findById(req.params.id);
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        message: "Project not found",
+      });
+    }
+
+    const user = await User.findById(userId);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const alreadyAdded = project.members.some((member) => {
+      return member.user.toString() === userId.toString();
+    });
+
+    if (alreadyAdded) {
+      return res.status(400).json({
+        success: false,
+        message: "User already added to this project",
+      });
+    }
+
+    project.members.push({
+      user: userId,
+      role: role || "member",
+    });
+
+    await project.save();
+
+    await createActivity(
+      req.user._id,
+      "add_project_member",
+      "project",
+      project._id,
+      `Member "${user.name}" added to project "${project.name}"`
+    );
+
+    await createNotification({
+      recipient: userId,
+      sender: req.user._id,
+      type: "project_member_added",
+      message: `You have been added to project "${project.name}"`,
+      entityType: "project",
+      entityId: project._id,
+    });
+
+    const updatedProject = await Project.findById(project._id)
+      .populate("createdBy", "name email role")
+      .populate("members.user", "name email role");
+
+    return res.status(200).json({
+      success: true,
+      message: "Member added to project successfully",
+      data: updatedProject,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+const getProjectMembers = async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.id)
+      .populate("members.user", "name email role");
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        message: "Project not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Project members fetched successfully",
+      data: project.members,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+const removeMemberFromProject = async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.id);
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        message: "Project not found",
+      });
+    }
+
+    project.members = project.members.filter((member) => {
+      return member.user.toString() !== req.params.userId.toString();
+    });
+
+    await project.save();
+
+    const updatedProject = await Project.findById(project._id)
+      .populate("members.user", "name email role");
+
+    return res.status(200).json({
+      success: true,
+      message: "Member removed from project successfully",
+      data: updatedProject.members,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+const getProjectWorkload = async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.id)
+      .populate("members.user", "name email role");
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        message: "Project not found",
+      });
+    }
+
+    const tasks = await Task.find({ project: project._id })
+      .populate("assignedMember", "name email role");
+
+    const workload = project.members.map((projectMember) => {
+      const memberTasks = tasks.filter((task) => {
+        return (
+          task.assignedMember &&
+          task.assignedMember._id.toString() === projectMember.user._id.toString()
+        );
+      });
+      const completedTasks = memberTasks.filter((task) => {
+        return task.status === "completed";
+      }).length;
+
+      return {
+        member: projectMember.user,
+        projectRole: projectMember.role,
+        totalTasks: memberTasks.length,
+        completedTasks,
+        pendingTasks: memberTasks.length - completedTasks,
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Project workload fetched successfully",
+      data: workload,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 const updateProject = async (req, res) => {
   try {
     const { name, description, deadline, status } = req.body;
@@ -229,6 +419,10 @@ module.exports = {
   createProject,
   getProjects,
   getProjectById,
+  addMemberToProject,
+  getProjectMembers,
+  removeMemberFromProject,
+  getProjectWorkload,
   updateProject,
   deleteProject,
 };

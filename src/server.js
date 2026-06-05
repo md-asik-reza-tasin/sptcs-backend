@@ -18,6 +18,7 @@ app.use("/api/projects", require("./routes/project.routes"));
 app.use("/api/tasks", require("./routes/task.routes"));
 app.use("/api/dashboard", require("./routes/dashboard.routes"));
 app.use("/api/activities", require("./routes/activity.routes"));
+app.use("/api/notifications", require("./routes/notification.routes"));
 
 app.get("/", (req, res) => {
   res.status(200).json({

@@ -2,6 +2,7 @@
 const Project = require("../models/Project");
 const User = require("../models/User");
 const createActivity = require("../utils/createActivity");
+const createNotification = require("../utils/createNotification");
 
 const allowedStatuses = ["todo", "in_progress", "completed"];
 const allowedPriorities = ["high", "medium", "low"];
@@ -73,6 +74,68 @@ const populateTask = (query) => {
     .populate("comments.user", "name email role");
 };
 
+const buildTaskFilter = (query, user) => {
+  const {
+    search,
+    project,
+    status,
+    priority,
+    assignedMember,
+    deadlineStatus,
+  } = query;
+  const filter = {};
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  if (search) {
+    const regex = new RegExp(escapeRegex(search), "i");
+    filter.$or = [{ title: regex }, { description: regex }];
+  }
+
+  if (project) filter.project = project;
+  if (status) filter.status = status;
+  if (priority) filter.priority = priority;
+
+  if (user.role === "member") {
+    filter.assignedMember = user._id;
+  } else if (assignedMember) {
+    filter.assignedMember = assignedMember;
+  }
+
+  if (deadlineStatus === "overdue") {
+    filter.dueDate = { $lt: today };
+    filter.status = { $ne: "completed" };
+  }
+
+  if (deadlineStatus === "upcoming") {
+    filter.dueDate = { $gte: today };
+    filter.status = { $ne: "completed" };
+  }
+
+  return filter;
+};
+
+const sendMemberTaskAccessResponse = (res) => {
+  return res.status(403).json({
+    success: false,
+    message: "You can view only your assigned tasks",
+  });
+};
+
+const memberOwnsTask = (task, user) => {
+  const assignedMemberId = task.assignedMember?._id || task.assignedMember;
+
+  return assignedMemberId.toString() === user._id.toString();
+};
+
+const isUserProjectMember = (project, userId) => {
+  return project.members.some((member) => {
+    const memberUserId = member.user?._id || member.user;
+
+    return memberUserId.toString() === userId.toString();
+  });
+};
+
 const createTask = async (req, res) => {
   try {
     const {
@@ -125,6 +188,13 @@ const createTask = async (req, res) => {
       });
     }
 
+    if (!isUserProjectMember(projectExists, assignedMember)) {
+      return res.status(400).json({
+        success: false,
+        message: "Assigned member must be part of this project",
+      });
+    }
+
     const duplicateTask = await findDuplicateTaskTitle(title, project);
 
     if (duplicateTask) {
@@ -155,6 +225,15 @@ const createTask = async (req, res) => {
       `Task "${task.title}" created`
     );
 
+    await createNotification({
+      recipient: assignedMember,
+      sender: req.user._id,
+      type: "task_assigned",
+      message: `You have been assigned task "${task.title}"`,
+      entityType: "task",
+      entityId: task._id,
+    });
+
     const populatedTask = await populateTask(Task.findById(task._id));
 
     return res.status(201).json({
@@ -176,39 +255,9 @@ const createTask = async (req, res) => {
 
 const getTasks = async (req, res) => {
   try {
-    const {
-      search,
-      project,
-      status,
-      priority,
-      assignedMember,
-      deadlineStatus,
-      sort,
-    } = req.query;
+    const { sort } = req.query;
     const { page, limit, skip } = getPagination(req.query.page, req.query.limit);
-    const filter = {};
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    if (search) {
-      const regex = new RegExp(escapeRegex(search), "i");
-      filter.$or = [{ title: regex }, { description: regex }];
-    }
-
-    if (project) filter.project = project;
-    if (status) filter.status = status;
-    if (priority) filter.priority = priority;
-    if (assignedMember) filter.assignedMember = assignedMember;
-
-    if (deadlineStatus === "overdue") {
-      filter.dueDate = { $lt: today };
-      filter.status = { $ne: "completed" };
-    }
-
-    if (deadlineStatus === "upcoming") {
-      filter.dueDate = { $gte: today };
-      filter.status = { $ne: "completed" };
-    }
+    const filter = buildTaskFilter(req.query, req.user);
 
     const total = await Task.countDocuments(filter);
     let tasks;
@@ -257,6 +306,139 @@ const getTasks = async (req, res) => {
   }
 };
 
+const getMyTasks = async (req, res) => {
+  try {
+    const { sort } = req.query;
+    const { page, limit, skip } = getPagination(req.query.page, req.query.limit);
+    const filter = buildTaskFilter(req.query, {
+      ...req.user.toObject(),
+      role: "member",
+      _id: req.user._id,
+    });
+
+    const total = await Task.countDocuments(filter);
+    let tasks;
+
+    if (sort === "highestPriority") {
+      const allTasks = await Task.find(filter)
+        .populate("project", "name status")
+        .populate("assignedMember", "name email role")
+        .populate("createdBy", "name email role")
+        .populate("comments.user", "name email role");
+
+      tasks = allTasks
+        .sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority])
+        .slice(skip, skip + limit);
+    } else {
+      const sortOptions = {
+        latest: { createdAt: -1 },
+        nearestDeadline: { dueDate: 1 },
+        recentlyUpdated: { updatedAt: -1 },
+      };
+
+      tasks = await Task.find(filter)
+        .populate("project", "name status")
+        .populate("assignedMember", "name email role")
+        .populate("createdBy", "name email role")
+        .populate("comments.user", "name email role")
+        .sort(sortOptions[sort] || sortOptions.latest)
+        .skip(skip)
+        .limit(limit);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Tasks fetched successfully",
+      total,
+      page,
+      pages: Math.ceil(total / limit),
+      count: tasks.length,
+      data: tasks,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+const getMemberTasks = async (req, res) => {
+  try {
+    const { memberId } = req.params;
+
+    if (
+      req.user.role === "member" &&
+      memberId.toString() !== req.user._id.toString()
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "You can view only your own tasks",
+      });
+    }
+
+    const { sort } = req.query;
+    const { page, limit, skip } = getPagination(req.query.page, req.query.limit);
+    const filter = buildTaskFilter(
+      {
+        ...req.query,
+        assignedMember: memberId,
+      },
+      {
+        role: req.user.role === "member" ? "member" : req.user.role,
+        _id: memberId,
+      }
+    );
+
+    filter.assignedMember = memberId;
+
+    const total = await Task.countDocuments(filter);
+    let tasks;
+
+    if (sort === "highestPriority") {
+      const allTasks = await Task.find(filter)
+        .populate("project", "name status deadline")
+        .populate("assignedMember", "name email role")
+        .populate("createdBy", "name email role")
+        .populate("comments.user", "name email role");
+
+      tasks = allTasks
+        .sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority])
+        .slice(skip, skip + limit);
+    } else {
+      const sortOptions = {
+        latest: { createdAt: -1 },
+        nearestDeadline: { dueDate: 1 },
+        recentlyUpdated: { updatedAt: -1 },
+      };
+
+      tasks = await Task.find(filter)
+        .populate("project", "name status deadline")
+        .populate("assignedMember", "name email role")
+        .populate("createdBy", "name email role")
+        .populate("comments.user", "name email role")
+        .sort(sortOptions[sort] || sortOptions.latest)
+        .skip(skip)
+        .limit(limit);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Member tasks fetched successfully",
+      total,
+      page,
+      pages: Math.ceil(total / limit),
+      count: tasks.length,
+      data: tasks,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 const getTaskById = async (req, res) => {
   try {
     const task = await populateTask(Task.findById(req.params.id));
@@ -266,6 +448,10 @@ const getTaskById = async (req, res) => {
         success: false,
         message: "Task not found",
       });
+    }
+
+    if (req.user.role === "member" && !memberOwnsTask(task, req.user)) {
+      return sendMemberTaskAccessResponse(res);
     }
 
     return res.status(200).json({
@@ -320,7 +506,12 @@ const updateTask = async (req, res) => {
       return sendDeadlineResponse(res);
     }
 
-    if (task.status === "completed" && hasField(req.body, "assignedMember")) {
+    const isReassigningCompletedTask =
+      task.status === "completed" &&
+      hasField(req.body, "assignedMember") &&
+      task.assignedMember.toString() !== assignedMember.toString();
+
+    if (isReassigningCompletedTask) {
       return res.status(400).json({
         success: false,
         message: "Completed tasks cannot be reassigned.",
@@ -334,6 +525,22 @@ const updateTask = async (req, res) => {
         return res.status(404).json({
           success: false,
           message: "Assigned member not found",
+        });
+      }
+
+      const taskProject = await Project.findById(task.project);
+
+      if (!taskProject) {
+        return res.status(404).json({
+          success: false,
+          message: "Project not found",
+        });
+      }
+
+      if (!isUserProjectMember(taskProject, assignedMember)) {
+        return res.status(400).json({
+          success: false,
+          message: "Assigned member must be part of this project",
         });
       }
     }
@@ -439,11 +646,11 @@ const updateTaskStatus = async (req, res) => {
 
     if (
       req.user.role === "member" &&
-      task.assignedMember.toString() !== req.user._id.toString()
+      !memberOwnsTask(task, req.user)
     ) {
       return res.status(403).json({
         success: false,
-        message: "You do not have permission to update this task",
+        message: "You can update only your assigned tasks",
       });
     }
 
@@ -457,6 +664,17 @@ const updateTaskStatus = async (req, res) => {
       task._id,
       `Task "${task.title}" marked as ${status}`
     );
+
+    if (req.user.role === "member") {
+      await createNotification({
+        recipient: task.createdBy,
+        sender: req.user._id,
+        type: "task_status_updated",
+        message: `Task "${task.title}" status updated to ${status}`,
+        entityType: "task",
+        entityId: task._id,
+      });
+    }
 
     const updatedTask = await populateTask(Task.findById(task._id));
 
@@ -477,6 +695,13 @@ const addComment = async (req, res) => {
   try {
     const { message } = req.body;
 
+    if (req.user.role === "member") {
+      return res.status(403).json({
+        success: false,
+        message: "Members cannot add comments",
+      });
+    }
+
     if (!message) {
       return res.status(400).json({
         success: false,
@@ -493,6 +718,10 @@ const addComment = async (req, res) => {
       });
     }
 
+    if (req.user.role === "member" && !memberOwnsTask(task, req.user)) {
+      return sendMemberTaskAccessResponse(res);
+    }
+
     task.comments.push({
       user: req.user._id,
       message,
@@ -507,6 +736,15 @@ const addComment = async (req, res) => {
       task._id,
       `Comment added on task "${task.title}"`
     );
+
+    await createNotification({
+      recipient: task.assignedMember,
+      sender: req.user._id,
+      type: "comment_added",
+      message: `New comment added on task "${task.title}"`,
+      entityType: "comment",
+      entityId: task._id,
+    });
 
     const updatedTask = await populateTask(Task.findById(task._id));
 
@@ -526,6 +764,8 @@ const addComment = async (req, res) => {
 module.exports = {
   createTask,
   getTasks,
+  getMyTasks,
+  getMemberTasks,
   getTaskById,
   updateTask,
   deleteTask,
